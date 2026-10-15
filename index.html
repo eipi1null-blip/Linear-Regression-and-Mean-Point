@@ -1,0 +1,458 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Advanced Interactive Correlation Coefficient Applet</title>
+    <style>
+        :root {
+            --primary-color: #0056b3;
+            --secondary-color: #e9ecef;
+            --point-color: #dc3545;
+            --line-color: #28a745;
+            --mean-line-color: #6c757d; /* Light gray for mean lines */
+            --bg-light: #f8f9fa;
+            --graph-size: 600px;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            background-color: var(--bg-light);
+            margin: 0;
+            padding: 16px;
+            box-sizing: border-box;
+        }
+
+        #applet-container {
+            box-sizing: border-box;
+            background-color: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 6px 15px rgba(0, 0, 0, 0.1);
+            max-width: 650px;
+            width: 100%;
+        }
+
+        h2 {
+            color: var(--primary-color);
+            text-align: center;
+            margin-bottom: 20px;
+            font-weight: 600;
+        }
+
+        #graph-area {
+            width: 100%;
+            max-width: var(--graph-size);
+            aspect-ratio: 1;
+            box-sizing: border-box;
+            border: 1px solid #ced4da;
+            position: relative;
+            background-color: #fff;
+            cursor: crosshair;
+            overflow: hidden;
+            touch-action: manipulation;
+        }
+
+        .point {
+            position: absolute;
+            width: 12px;
+            height: 12px;
+            background-color: var(--point-color);
+            border-radius: 50%;
+            cursor: pointer;
+            transform: translate(-50%, -50%);
+            z-index: 10;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+            touch-action: none;
+        }
+
+        #r-value {
+            position: absolute;
+            top: 15px;
+            right: 15px;
+            font-size: 1.3em;
+            color: #333;
+            background-color: rgba(255, 255, 255, 0.9);
+            padding: 8px 12px;
+            border-radius: 4px;
+            border: 1px solid #dee2e6;
+            z-index: 20;
+            pointer-events: none;
+        }
+
+        #r-value em {
+            font-style: italic;
+            font-weight: bold;
+        }
+
+        .controls {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: space-around;
+            align-items: center;
+            margin-top: 20px;
+            padding: 10px;
+            background-color: var(--secondary-color);
+            border-radius: 4px;
+        }
+
+        .controls label {
+            font-weight: 500;
+            color: #495057;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            margin: 5px 10px;
+        }
+
+        .controls input[type="checkbox"] {
+            margin-right: 8px;
+            width: 16px;
+            height: 16px;
+        }
+        
+        #reset-button {
+            padding: 8px 15px;
+            background-color: #6c757d;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: 500;
+            transition: background-color 0.2s;
+        }
+
+        #reset-button:hover {
+            background-color: #5a6268;
+        }
+
+        #overlay-svg {
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            z-index: 5;
+        }
+
+        .instructions {
+            color: #495057;
+            font-size: 0.9rem;
+            line-height: 1.45;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+
+<div id="applet-container">
+    <h2>Correlation & Regression Visualizer</h2>
+    
+    <p class="instructions">Click or tap to add a point. Drag a point to move it; double-click or double-tap to remove it.</p>
+    <div id="graph-area" aria-label="Interactive scatterplot, x and y from 0 to 100">
+        <div id="r-value"><em>r</em> = N/A</div>
+        <svg id="overlay-svg" viewBox="0 0 600 600" preserveAspectRatio="none" aria-hidden="true"></svg>
+    </div>
+
+    <div class="controls">
+        <label for="toggle-line">
+            <input type="checkbox" id="toggle-line">
+            Show Regression Line
+        </label>
+        <label for="toggle-mean-x">
+            <input type="checkbox" id="toggle-mean-x">
+            Show Mean X
+        </label>
+        <label for="toggle-mean-y">
+            <input type="checkbox" id="toggle-mean-y">
+            Show Mean Y
+        </label>
+        <button id="reset-button">Reset Points</button>
+    </div>
+</div>
+
+<script>
+    const GRAPH_SIZE = 600;
+    const graphArea = document.getElementById('graph-area');
+    const rValueDisplay = document.getElementById('r-value');
+    const overlaySVG = document.getElementById('overlay-svg');
+    const toggleLineCheckbox = document.getElementById('toggle-line');
+    const toggleMeanXCheckbox = document.getElementById('toggle-mean-x');
+    const toggleMeanYCheckbox = document.getElementById('toggle-mean-y');
+    const resetButton = document.getElementById('reset-button');
+    
+    let points = [];
+    let nextPointId = 1;
+    let activePointer = null;
+    let lastTap = null;
+    
+    // Get CSS variable for colors
+    const varLineColor = getComputedStyle(document.documentElement).getPropertyValue('--line-color').trim();
+    const varMeanLineColor = getComputedStyle(document.documentElement).getPropertyValue('--mean-line-color').trim();
+
+    // --- Core Statistical Functions ---
+
+    /** Maps screen coordinates (0-600) to theoretical data coordinates (0-100) */
+    function getNormalizedData() {
+        const scaleFactor = GRAPH_SIZE / 100;
+        return points.map(p => ({
+            x: p.x / scaleFactor,
+            y: (GRAPH_SIZE - p.y) / scaleFactor
+        }));
+    }
+
+    /** Calculates the Pearson correlation coefficient (r) */
+    function calculateCorrelation(data) {
+        const n = data.length;
+        if (n < 2) return 'N/A';
+
+        let sumX = 0, sumY = 0, sumXY = 0, sumX2 = 0, sumY2 = 0;
+
+        for (const p of data) {
+            sumX += p.x;
+            sumY += p.y;
+            sumXY += p.x * p.y;
+            sumX2 += p.x * p.x;
+            sumY2 += p.y * p.y;
+        }
+
+        const numerator = (n * sumXY) - (sumX * sumY);
+        const denominatorX = (n * sumX2) - (sumX * sumX);
+        const denominatorY = (n * sumY2) - (sumY * sumY);
+        const denominator = Math.sqrt(denominatorX) * Math.sqrt(denominatorY);
+
+        if (denominator === 0) return 'Undefined';
+        
+        const r = numerator / denominator;
+        return r.toFixed(3);
+    }
+
+    /** Calculates the slope (b), y-intercept (a), and means (meanX, meanY) */
+    function calculateRegressionStats(data) {
+        const n = data.length;
+        if (n < 2) return null;
+
+        let sumX = 0, sumY = 0, sumXY = 0, sumX2 = 0;
+
+        for (const p of data) {
+            sumX += p.x;
+            sumY += p.y;
+            sumXY += p.x * p.y;
+            sumX2 += p.x * p.x;
+        }
+
+        const meanX = sumX / n;
+        const meanY = sumY / n;
+        
+        const numB = (n * sumXY) - (sumX * sumY);
+        const denB = (n * sumX2) - (sumX * sumX);
+
+        if (denB === 0) {
+            return { b: NaN, a: NaN, meanX, meanY }; // Undefined slope
+        } 
+
+        // 1. Calculate Slope (b)
+        const b = numB / denB;
+        
+        // 2. Calculate Y-intercept (a)
+        const a = meanY - b * meanX;
+
+        return { a, b, meanX, meanY };
+    }
+
+    // --- Drawing & Update Functions ---
+
+    function drawLine(x1, y1, x2, y2, color, width, dasharray = '') {
+        const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+        line.setAttribute('x1', x1);
+        line.setAttribute('y1', y1);
+        line.setAttribute('x2', x2);
+        line.setAttribute('y2', y2);
+        line.setAttribute('stroke', color);
+        line.setAttribute('stroke-width', width);
+        line.setAttribute('stroke-dasharray', dasharray);
+        line.setAttribute('opacity', 0.6);
+        overlaySVG.appendChild(line);
+    }
+
+    function drawRegressionAndMeanLines(stats) {
+        // Clear previous lines
+        overlaySVG.innerHTML = ''; 
+
+        if (!stats) return;
+
+        const scale = GRAPH_SIZE / 100;
+        const { a, b, meanX, meanY } = stats;
+
+        // --- 1. Draw Mean Lines ---
+
+        // Screen coordinates for means
+        const meanX_screen = meanX * scale;
+        const meanY_screen = GRAPH_SIZE - (meanY * scale); // Invert Y
+
+        // Draw Mean X
+        if (toggleMeanXCheckbox.checked) {
+            drawLine(meanX_screen, 0, meanX_screen, GRAPH_SIZE, varMeanLineColor, 1.5, '2 2');
+        }
+
+        // Draw Mean Y
+        if (toggleMeanYCheckbox.checked) {
+            drawLine(0, meanY_screen, GRAPH_SIZE, meanY_screen, varMeanLineColor, 1.5, '2 2');
+        }
+
+        // --- 2. Draw Regression Line ---
+        if (toggleLineCheckbox.checked && !isNaN(b)) {
+            // Use the edges of the graph (data X=0 and X=100)
+            const x1_data = 0;
+            const y1_data = a + b * x1_data;
+
+            const x2_data = 100;
+            const y2_data = a + b * x2_data;
+
+            const x1_screen = x1_data * scale;
+            const y1_screen = GRAPH_SIZE - (y1_data * scale); 
+
+            const x2_screen = x2_data * scale;
+            const y2_screen = GRAPH_SIZE - (y2_data * scale); 
+
+            drawLine(x1_screen, y1_screen, x2_screen, y2_screen, varLineColor, 2, '5 5');
+
+            // Draw a small circle at the mean point (x-bar, y-bar) for emphasis
+            if (toggleMeanXCheckbox.checked || toggleMeanYCheckbox.checked) {
+                const meanCircle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+                meanCircle.setAttribute('cx', meanX_screen);
+                meanCircle.setAttribute('cy', meanY_screen);
+                meanCircle.setAttribute('r', 4);
+                meanCircle.setAttribute('fill', 'var(--line-color)');
+                meanCircle.setAttribute('stroke', 'white');
+                meanCircle.setAttribute('stroke-width', 1.5);
+                meanCircle.setAttribute('opacity', 1);
+                overlaySVG.appendChild(meanCircle);
+            }
+        }
+    }
+
+    function updateApplet() {
+        const data = getNormalizedData();
+        
+        // 1. Update Correlation Coefficient
+        rValueDisplay.innerHTML = `<em>r</em> = ${calculateCorrelation(data)}`;
+
+        // 2. Update Regression Line and Mean Lines
+        const regressionStats = calculateRegressionStats(data);
+        drawRegressionAndMeanLines(regressionStats);
+    }
+
+    // --- UI and Event Handling ---
+
+    function createPoint(x, y) {
+        const newPoint = { x, y, id: nextPointId++ };
+        points.push(newPoint);
+
+        const pointDiv = document.createElement('div');
+        pointDiv.classList.add('point');
+        positionPoint(pointDiv, newPoint);
+        pointDiv.setAttribute('data-id', newPoint.id);
+
+        pointDiv.addEventListener('pointerdown', startDrag);
+        pointDiv.addEventListener('pointermove', dragPoint);
+        pointDiv.addEventListener('pointerup', endDrag);
+        pointDiv.addEventListener('pointercancel', endDrag);
+        pointDiv.addEventListener('dblclick', deletePoint);
+
+        graphArea.appendChild(pointDiv);
+        updateApplet();
+    }
+
+    function positionPoint(element, point) {
+        element.style.left = `${point.x / GRAPH_SIZE * 100}%`;
+        element.style.top = `${point.y / GRAPH_SIZE * 100}%`;
+    }
+
+    function eventPosition(e) {
+        const rect = graphArea.getBoundingClientRect();
+        return {
+            x: Math.max(0, Math.min((e.clientX - rect.left) / rect.width * GRAPH_SIZE, GRAPH_SIZE)),
+            y: Math.max(0, Math.min((e.clientY - rect.top) / rect.height * GRAPH_SIZE, GRAPH_SIZE))
+        };
+    }
+
+    function startDrag(e) {
+        e.stopPropagation();
+        const element = e.currentTarget;
+        activePointer = { id: e.pointerId, element, point: points.find(p => p.id === Number(element.dataset.id)), moved: false };
+        element.setPointerCapture(e.pointerId);
+    }
+
+    function dragPoint(e) {
+        if (!activePointer || activePointer.id !== e.pointerId || activePointer.element !== e.currentTarget) return;
+        const position = eventPosition(e);
+        if (Math.abs(position.x - activePointer.point.x) + Math.abs(position.y - activePointer.point.y) > 2) activePointer.moved = true;
+        if (!activePointer.moved) return;
+        Object.assign(activePointer.point, position);
+        positionPoint(activePointer.element, activePointer.point);
+        updateApplet();
+    }
+
+    function endDrag(e) {
+        if (!activePointer || activePointer.id !== e.pointerId) return;
+        if (e.type === 'pointerup' && e.pointerType === 'touch' && !activePointer.moved) {
+            const now = Date.now();
+            const pointId = activePointer.point.id;
+            if (lastTap && lastTap.id === pointId && now - lastTap.time < 400) {
+                removePoint(activePointer.element);
+                lastTap = null;
+            } else {
+                lastTap = { id: pointId, time: now };
+            }
+        }
+        activePointer = null;
+    }
+
+    function deletePoint(e) {
+        e.stopPropagation(); 
+        
+        removePoint(e.currentTarget);
+    }
+
+    function removePoint(pointElement) {
+        const pointId = Number(pointElement.dataset.id);
+        points = points.filter(p => p.id !== pointId);
+        pointElement.remove();
+
+        updateApplet();
+    }
+
+    function resetApplet() {
+        // Clear internal data array
+        points = [];
+        // Clear points from the DOM
+        graphArea.querySelectorAll('.point').forEach(p => p.remove());
+        // Reset calculation and drawing
+        updateApplet();
+    }
+
+    // Main listener for adding new points
+    graphArea.addEventListener('click', (e) => {
+        if (e.target !== graphArea) return;
+        const { x, y } = eventPosition(e);
+        createPoint(x, y);
+    });
+
+    // Listeners for Checkboxes
+    toggleLineCheckbox.addEventListener('change', updateApplet);
+    toggleMeanXCheckbox.addEventListener('change', updateApplet);
+    toggleMeanYCheckbox.addEventListener('change', updateApplet);
+
+    // Listener for Reset Button
+    resetButton.addEventListener('click', resetApplet);
+
+    // Initial update
+    updateApplet();
+</script>
+</body>
+</html>
